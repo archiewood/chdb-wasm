@@ -103,6 +103,40 @@
   button.btn-secondary { background: transparent; color: var(--accent-text); border: 1px solid var(--accent-text); }
   button.btn-secondary:hover { background: var(--sel); }
 
+  /* ---------- Examples dropdown ---------- */
+  header.toolbar { z-index: 30; }   /* keep the menu above the terminal */
+  .examples-wrap { position: relative; display: inline-flex; }
+  .examples-menu {
+    position: absolute;
+    top: calc(100% + 6px);
+    left: 0;
+    min-width: 260px;
+    max-width: min(72vw, 560px);
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 4px;
+    box-shadow: 0 10px 28px rgba(0, 0, 0, 0.35);
+  }
+  .examples-menu.hide { display: none; }
+  button.example-item {
+    display: block;
+    width: 100%;
+    text-align: left;
+    font-family: var(--mono);
+    font-size: 12px;
+    color: var(--text);
+    background: transparent;
+    border: 0;
+    border-radius: 6px;
+    padding: 7px 9px;
+    cursor: pointer;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  button.example-item:hover { background: var(--sel); color: var(--accent-text); }
+
   button.icon-btn {
     display: inline-flex;
     align-items: center;
@@ -211,6 +245,10 @@
       <button type="button" class="btn btn-primary" id="btn-new">New</button>
       <button type="button" class="btn btn-secondary" id="btn-import">Import</button>
       <input type="file" id="file-picker" class="visually-hidden" aria-hidden="true" tabindex="-1" multiple />
+      <div class="examples-wrap">
+        <button type="button" class="btn btn-secondary" id="btn-examples" aria-haspopup="true" aria-expanded="false">Examples</button>
+        <div class="examples-menu hide" id="examples-menu" role="menu"></div>
+      </div>
     </div>
     <div class="title"><span class="accent">chDB</span> <span class="rest">SQL Shell</span></div>
     <div class="group">
@@ -254,6 +292,8 @@
     var blockCaret = document.getElementById("block-caret");
     var btnNew = document.getElementById("btn-new");
     var btnImport = document.getElementById("btn-import");
+    var btnExamples = document.getElementById("btn-examples");
+    var examplesMenu = document.getElementById("examples-menu");
     var filePicker = document.getElementById("file-picker");
     var themeToggle = document.getElementById("theme-toggle");
     var root = document.documentElement;
@@ -263,7 +303,7 @@
     var busy = false;            // true while (re)connecting or running a query
     var engineState = "loading"; // 'loading' | 'ready' | 'error'
     var engineMsg = "";
-    var loadPct = "";
+    var loadMiB = "";
     var chdbVersion = null;
     var bundleVariant = null;    // 'mt' | 'st' — decides how aggressive the thread settings may be
     var titleEl = null, brandSpan = null, restSpan = null;
@@ -324,7 +364,7 @@
       } else {
         brandSpan.className = "accent"; brandSpan.textContent = "chDB SQL Shell";
         restSpan.className = "muted";
-        restSpan.textContent = " is initializing…" + (loadPct ? " " + loadPct : "");
+        restSpan.textContent = " is initializing…" + (loadMiB ? " " + loadMiB : "");
       }
       scrollToBottom();
     }
@@ -556,6 +596,16 @@
         autoResize(); positionCaret(); scrollToBottom();
       });
     }
+
+    // Drop an example query into the prompt; it ends with ';', so pressing Enter runs it.
+    function fillInput(sql) {
+      if (engineState !== "ready") return;
+      input.value = sql;
+      draft = sql;
+      historyIndex = -1;
+      focusInput();
+      moveCaretToEnd();
+    }
     function readyToRun(v) { return /;\s*$/.test(v); }
 
     input.addEventListener("input", function () {
@@ -617,6 +667,34 @@
     btnNew.addEventListener("click", newSession);
     btnImport.addEventListener("click", function () { echo(".files add"); openFilePicker(); });
 
+    // ---------- Examples dropdown ----------
+    // Click an item to drop the query into the prompt (it ends with ';', so Enter runs it).
+    var EXAMPLES = [
+      "SELECT version();",
+      "SELECT number, number * number AS square FROM numbers(10);",
+      "SELECT * FROM url('https://datasets-documentation.s3.eu-west-3.amazonaws.com/nyc-taxi/trips_0.gz', 'TabSeparatedWithNames') LIMIT 10;",
+      "SELECT * FROM s3('https://datasets-documentation.s3.eu-west-3.amazonaws.com/nyc-taxi/trips_0.gz', NOSIGN, 'TabSeparatedWithNames') LIMIT 10;",
+      "SELECT * FROM url('https://datasets-documentation.s3.eu-west-3.amazonaws.com/house_parquet/house_0.parquet') LIMIT 10;"
+    ];
+    function openExamples() { examplesMenu.classList.remove("hide"); btnExamples.setAttribute("aria-expanded", "true"); }
+    function closeExamples() { examplesMenu.classList.add("hide"); btnExamples.setAttribute("aria-expanded", "false"); }
+    EXAMPLES.forEach(function (sql) {
+      var item = document.createElement("button");
+      item.type = "button";
+      item.className = "example-item";
+      item.textContent = sql;
+      item.title = sql;
+      item.addEventListener("click", function () { closeExamples(); fillInput(sql); });
+      examplesMenu.appendChild(item);
+    });
+    btnExamples.addEventListener("click", function (e) {
+      e.stopPropagation();
+      if (examplesMenu.classList.contains("hide")) openExamples(); else closeExamples();
+    });
+    examplesMenu.addEventListener("click", function (e) { e.stopPropagation(); });
+    document.addEventListener("click", closeExamples);
+    document.addEventListener("keydown", function (e) { if (e.key === "Escape") closeExamples(); });
+
     // ---------- Engine connect / boot ----------
     // On wasm the pthread pool is small + strict; ClickHouse otherwise fans out many
     // helper threads (download / parsing / prefetch / parallel formatting) by core count
@@ -642,8 +720,9 @@
           moduleUrl: bundle.moduleUrl,
           wasmUrl: bundle.wasmUrl,
           onProgress: function (loaded, total) {
-            // Percentage only (needs Content-Length); no MB fallback.
-            if (total) { loadPct = ((100 * loaded / total) | 0) + "%"; renderTitle(); }
+            // Live count of how much of the wasm has downloaded so far, in MiB.
+            loadMiB = (loaded / 1048576).toFixed(1) + " MiB";
+            renderTitle();
           },
         });
         conn = await db.connect();   // open the in-memory connection (one-time wasm load already done)
