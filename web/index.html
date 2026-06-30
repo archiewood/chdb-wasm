@@ -46,7 +46,7 @@
     color: var(--text);
     font-family: var(--mono);
     font-size: 14px;
-    line-height: 1.55;
+    line-height: 1.2;
     -webkit-font-smoothing: antialiased;
     text-rendering: optimizeLegibility;
     display: flex;
@@ -226,7 +226,7 @@
   }
   .block-caret {
     position: absolute; z-index: 0;       /* behind the textarea text so the glyph stays readable */
-    width: 0.6em; height: 1.2em;
+    width: 0.6em; height: 1.2em;          /* height is a fallback; positionCaret() sets it to the line box */
     background: var(--caret);
     pointer-events: none;
     animation: blink 1.05s steps(1, end) infinite;
@@ -287,7 +287,7 @@
     <div class="scrollback" id="scrollback" aria-live="polite"></div>
 
     <div class="input-row" id="input-row" style="display:none">
-      <span class="prompt" aria-hidden="true">:)</span>
+      <span class="prompt" aria-hidden="true">chdb :)</span>
       <div class="input-field" id="input-field">
         <div class="ta-mirror" id="ta-mirror" aria-hidden="true"></div>
         <div class="block-caret hide" id="block-caret" aria-hidden="true"></div>
@@ -376,7 +376,7 @@
       if (!brandSpan) return;
       if (engineState === "ready") {
         brandSpan.className = "accent"; brandSpan.textContent = "chDB";
-        restSpan.className = "muted"; restSpan.textContent = chdbVersion ? (" v" + chdbVersion) : "";
+        restSpan.className = "muted"; restSpan.textContent = chdbVersion ? (" (ClickHouse embedded version " + chdbVersion + ")") : "";
       } else if (engineState === "error") {
         brandSpan.className = "accent"; brandSpan.textContent = "chDB SQL Shell";
         restSpan.className = "error-line"; restSpan.textContent = " — " + engineMsg;
@@ -396,7 +396,7 @@
       var row = document.createElement("div");
       row.className = "input-row";
       var p = document.createElement("span");
-      p.className = "prompt"; p.textContent = ":)";
+      p.className = "prompt"; p.textContent = "chdb :)";
       var q = document.createElement("span");
       q.className = "echo-block"; q.textContent = query;
       row.appendChild(p); row.appendChild(q);
@@ -600,10 +600,12 @@
       var marker = document.createElement("span");
       marker.textContent = "\u200b";
       taMirror.appendChild(marker);
+      // Caret fills the line box exactly, so it stays aligned at ANY line-height:
+      // height == line box => no centering offset, no overflow into the next line.
       var lh = parseFloat(getComputedStyle(input).lineHeight) || 20;
-      var ch = blockCaret.offsetHeight || 16;
+      blockCaret.style.height = lh + "px";
       blockCaret.style.left = marker.offsetLeft + "px";
-      blockCaret.style.top = (marker.offsetTop + Math.max(0, (lh - ch) / 2)) + "px";
+      blockCaret.style.top = marker.offsetTop + "px";
       blockCaret.classList.remove("hide");
       blockCaret.style.animation = "none"; void blockCaret.offsetWidth; blockCaret.style.animation = "";
     }
@@ -616,7 +618,7 @@
       });
     }
 
-    // Drop an example query into the prompt; it ends with ';', so pressing Enter runs it.
+    // Drop an example query into the prompt; press Enter to run it.
     function fillInput(sql) {
       if (engineState !== "ready") return;
       input.value = sql;
@@ -625,8 +627,6 @@
       focusInput();
       moveCaretToEnd();
     }
-    function readyToRun(v) { return /;\s*$/.test(v); }
-
     input.addEventListener("input", function () {
       historyIndex = -1;
       draft = input.value;
@@ -646,12 +646,13 @@
 
     input.addEventListener("keydown", function (e) {
       if (e.key === "Enter") {
+        // Enter runs the query (like ClickHouse); Shift+Enter inserts a newline for
+        // multi-line editing. A trailing ';' is not required.
         if (e.shiftKey) return;
+        e.preventDefault();
         var v = input.value;
-        var t = v.trim();
-        if (t === "") { e.preventDefault(); echo(""); input.value = ""; autoResize(); positionCaret(); return; }
-        if (t.charAt(0) === ".") { e.preventDefault(); submit(v); return; }
-        if (readyToRun(v)) { e.preventDefault(); submit(v); return; }
+        if (v.trim() === "") { echo(""); input.value = ""; autoResize(); positionCaret(); return; }
+        submit(v);
         return;
       }
       if (e.key === "ArrowUp") {
@@ -687,7 +688,7 @@
     btnImport.addEventListener("click", function () { echo(".files add"); openFilePicker(); });
 
     // ---------- Examples dropdown ----------
-    // Click an item to drop the query into the prompt (it ends with ';', so Enter runs it).
+    // Click an item to drop the query into the prompt; press Enter to run it.
     var EXAMPLES = [
       { group: "Local", label: "Version", sql: "SELECT version();" },
       { group: "Local", label: "Generated rows", sql: "SELECT number, number * number AS square FROM numbers(10);" },
