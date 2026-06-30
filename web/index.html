@@ -22,6 +22,13 @@
     --sel: rgba(250, 255, 105, 0.22);
     --caret: rgba(250, 255, 105, 0.85);
     --mono: "SFMono-Regular", Menlo, Consolas, "Liberation Mono", monospace;
+    /* Syntax-highlight palette — clickhouse-client colors rendered via play's xterm theme */
+    --hl-identifier: #4ec9b0; --hl-function: #d7ba7d; --hl-alias: #00d7d7;
+    --hl-substitution: #c586c0; --hl-number: #00d700; --hl-string: #6a9955;
+    --hl-string-escape: #ffffff; --hl-string-meta: #c586c0;
+    /* rainbow parentheses — clickhouse-client's 8-color cycle */
+    --br0: #d787af; --br1: #d75f5f; --br2: #d7af5f; --br3: #d7d75f;
+    --br4: #5fd75f; --br5: #5fd7d7; --br6: #875fd7; --br7: #d75fd7;
   }
   :root[data-theme="light"] {
     --bg: #ffffff;
@@ -37,6 +44,13 @@
     --error: #b42318;
     --sel: #fff1a8;
     --caret: rgba(138, 109, 0, 0.55);
+    /* Highlight palette adjusted for the light background */
+    --hl-identifier: #0e7490; --hl-function: #795e26; --hl-alias: #0e7490;
+    --hl-substitution: #a000c0; --hl-number: #098658; --hl-string: #0a7a2f;
+    --hl-string-escape: #555555; --hl-string-meta: #a000c0;
+    /* rainbow parentheses — darkened for the light background */
+    --br0: #b02982; --br1: #c1121f; --br2: #b5740b; --br3: #8a7a00;
+    --br4: #1a7f37; --br5: #0e7490; --br6: #5b21b6; --br7: #a21caf;
   }
 
   * { box-sizing: border-box; }
@@ -236,17 +250,42 @@
   @keyframes blink { 0%, 50% { opacity: 1; } 50.01%, 100% { opacity: 0; } }
 
   #cmd-input {
-    position: relative; z-index: 1;
+    position: relative; z-index: 2;
     display: block; width: 100%;
     border: 0; padding: 0; margin: 0;
     background: transparent;
-    color: var(--text);
+    color: transparent;                   /* text is shown by the highlight overlay below */
     font: inherit; line-height: inherit;
     caret-color: transparent;             /* native caret hidden — we draw the block caret */
     white-space: pre-wrap; word-break: break-word;
     overflow: hidden; resize: none; outline: none;
   }
   #cmd-input::selection { background: var(--sel); }
+
+  /* Highlight overlay: colored text sits behind the transparent textarea, aligned 1:1. */
+  .hl-layer {
+    position: absolute; left: 0; top: 0; z-index: 1;
+    width: 100%;
+    font: inherit; line-height: inherit;
+    white-space: pre-wrap; word-break: break-word;
+    margin: 0; padding: 0; border: 0;
+    pointer-events: none;
+    color: var(--text);
+  }
+  .hl-keyword { font-weight: 700; }
+  .hl-identifier { color: var(--hl-identifier); }
+  .hl-function { color: var(--hl-function); }
+  .hl-alias { color: var(--hl-alias); }
+  .hl-substitution { color: var(--hl-substitution); }
+  .hl-number { color: var(--hl-number); }
+  .hl-string { color: var(--hl-string); }
+  .hl-string_escape { color: var(--hl-string-escape); font-weight: 700; }
+  .hl-string_metacharacter { color: var(--hl-string-meta); font-weight: 700; }
+  .hl-br0 { color: var(--br0); } .hl-br1 { color: var(--br1); } .hl-br2 { color: var(--br2); } .hl-br3 { color: var(--br3); }
+  .hl-br4 { color: var(--br4); } .hl-br5 { color: var(--br5); } .hl-br6 { color: var(--br6); } .hl-br7 { color: var(--br7); }
+  /* While composing with an IME, show the textarea's own text and hide the overlay. */
+  .input-field.composing #cmd-input { color: var(--text); }
+  .input-field.composing .hl-layer { visibility: hidden; }
 
   .visually-hidden {
     position: absolute;
@@ -291,6 +330,7 @@
       <span class="prompt" aria-hidden="true">chdb :)</span>
       <div class="input-field" id="input-field">
         <div class="ta-mirror" id="ta-mirror" aria-hidden="true"></div>
+        <div class="hl-layer" id="hl-layer" aria-hidden="true"></div>
         <div class="block-caret hide" id="block-caret" aria-hidden="true"></div>
         <label class="visually-hidden" for="cmd-input">Enter SQL query</label>
         <textarea id="cmd-input" rows="1" autocomplete="off" autocapitalize="off"
@@ -307,6 +347,8 @@
     var input = document.getElementById("cmd-input");
     var inputRow = document.getElementById("input-row");
     var taMirror = document.getElementById("ta-mirror");
+    var hlLayer = document.getElementById("hl-layer");
+    var inputField = document.getElementById("input-field");
     var blockCaret = document.getElementById("block-caret");
     var btnNew = document.getElementById("btn-new");
     var btnImport = document.getElementById("btn-import");
@@ -391,13 +433,18 @@
 
     function echo(query) {
       var row = document.createElement("div");
-      row.className = "input-row echo-row";
+      // The query↔result gap only matters when there IS output; bare Enter (empty echo)
+      // stays flush so repeated prompts sit on adjacent lines.
+      row.className = query.trim() === "" ? "input-row" : "input-row echo-row";
       var p = document.createElement("span");
       p.className = "prompt"; p.textContent = "chdb :)";
       var q = document.createElement("span");
       q.className = "echo-block"; q.textContent = query;
       row.appendChild(p); row.appendChild(q);
       appendBlock(row);
+      // Keep the submitted query highlighted in the scrollback (like ClickHouse).
+      var t = query.trim();
+      if (t && t.charAt(0) !== ".") fetchHighlight(query).then(function (ranges) { if (ranges) renderRanges(q, query, ranges); });
     }
 
     // Render chDB's PrettyCompact output verbatim (byte-for-byte what ClickHouse shows),
@@ -542,6 +589,7 @@
       draft = "";
       input.value = "";
       autoResize();
+      hlLayer.textContent = "";
       var trimmed = buffer.trim();
       if (trimmed.charAt(0) === ".") {
         handleCommand(trimmed.replace(/;+\s*$/, "")); // dot-command: no ';' needed (tolerate a trailing one)
@@ -558,7 +606,7 @@
       history = []; historyIndex = -1; draft = "";
       registered = [];
       scrollback.innerHTML = "";
-      input.value = ""; autoResize();
+      input.value = ""; autoResize(); hlLayer.textContent = "";
       hidePrompt();
       // Close + reopen the chDB connection on the SAME loaded engine — just API
       // calls into the wasm, so the engine is NOT re-downloaded or re-instantiated.
@@ -608,8 +656,83 @@
       window.requestAnimationFrame(function () {
         var len = input.value.length;
         try { input.setSelectionRange(len, len); } catch (e) {}
-        autoResize(); positionCaret(); scrollToBottom();
+        autoResize(); positionCaret(); scheduleHighlight(); scrollToBottom();
       });
+    }
+
+    // ---------- Syntax highlighting (engine-driven; colors match clickhouse-client) ----------
+    // On each edit, ask the engine for highlight ranges via highlightQuery() and paint colored
+    // spans into an overlay aligned 1:1 behind the transparent textarea. highlightQuery never
+    // throws on partial/invalid SQL, so it is safe to call on every keystroke while typing.
+    var hlSeq = 0, hlTimer = null, composing = false;
+    function escHtml(s) { return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;"); }
+    // highlightQuery offsets are UTF-8 byte positions; map them to UTF-16 string indices.
+    function byteToCharIndex(str) {
+      var enc = new TextEncoder(), bytes = enc.encode(str), b2c = new Int32Array(bytes.length + 1), bi = 0;
+      for (var ci = 0; ci < str.length;) {
+        var code = str.codePointAt(ci), n = enc.encode(String.fromCodePoint(code)).length;
+        for (var k = 0; k < n; k++) b2c[bi + k] = ci;
+        bi += n; ci += code > 0xFFFF ? 2 : 1;
+      }
+      b2c[bytes.length] = str.length;
+      return b2c;
+    }
+    // Gap text (between highlightQuery ranges): escape, and color round brackets with
+    // rainbow parentheses — each '(' pair takes the next color in an 8-color cycle counted
+    // left-to-right across the whole query (matching clickhouse-client); the stack pairs each
+    // ')' back to its '(' color. (Brackets never fall inside a highlightQuery range.)
+    function emitGap(s, br) {
+      var out = "", buf = "";
+      for (var i = 0; i < s.length; i++) {
+        var ch = s.charAt(i);
+        if (ch === "(") {
+          if (buf) { out += escHtml(buf); buf = ""; }
+          var c = br.n % 8; br.stack.push(c); br.n++;
+          out += '<span class="hl-br' + c + '">(</span>';
+        } else if (ch === ")") {
+          if (buf) { out += escHtml(buf); buf = ""; }
+          if (br.stack.length) out += '<span class="hl-br' + br.stack.pop() + '">)</span>';
+          else out += ")";
+        } else { buf += ch; }
+      }
+      if (buf) out += escHtml(buf);
+      return out;
+    }
+    function renderRanges(el, str, ranges) {
+      var b2c = byteToCharIndex(str), html = "", pos = 0, br = { n: 0, stack: [] };
+      ranges.sort(function (a, b) { return a.begin - b.begin; });
+      for (var i = 0; i < ranges.length; i++) {
+        var r = ranges[i], cs = b2c[r.begin], ce = b2c[r.end];
+        if (cs == null || ce == null || ce <= cs || cs < pos) continue;
+        if (cs > pos) html += emitGap(str.slice(pos, cs), br);
+        html += '<span class="hl-' + r.type + '">' + escHtml(str.slice(cs, ce)) + "</span>";
+        pos = ce;
+      }
+      if (pos < str.length) html += emitGap(str.slice(pos), br);
+      el.innerHTML = html;
+    }
+    // Ask the engine for highlight ranges. Resolves to ranges[] or null; never rejects.
+    function fetchHighlight(sql) {
+      if (!conn) return Promise.resolve(null);
+      var lit = sql.replace(/\\/g, "\\\\").replace(/'/g, "\\'").replace(/\n/g, "\\n").replace(/\r/g, "\\r").replace(/\t/g, "\\t");
+      return conn.query("SELECT highlightQuery('" + lit + "') FORMAT JSONCompact", "JSONCompact").then(function (res) {
+        try { var r = JSON.parse(res.text()).data[0][0]; return Array.isArray(r) ? r : null; } catch (e) { return null; }
+      }).catch(function () { return null; });
+    }
+    function highlightNow() {
+      var value = input.value;
+      if (value === "") { hlLayer.textContent = ""; return; }
+      if (composing) return;
+      var seq = ++hlSeq;
+      fetchHighlight(value).then(function (ranges) {
+        if (seq !== hlSeq || input.value !== value || !ranges) return;   // a newer edit superseded this one
+        renderRanges(hlLayer, value, ranges);
+      });
+    }
+    function scheduleHighlight() {
+      hlLayer.textContent = input.value;     // show typed text at once (uncolored); recolor right after
+      if (hlTimer) clearTimeout(hlTimer);
+      hlTimer = setTimeout(highlightNow, 30);
     }
 
     // Drop an example query into the prompt; press Enter to run it.
@@ -626,8 +749,11 @@
       draft = input.value;
       autoResize();
       positionCaret();
+      scheduleHighlight();
       scrollToBottom();
     });
+    input.addEventListener("compositionstart", function () { composing = true; inputField.classList.add("composing"); });
+    input.addEventListener("compositionend", function () { composing = false; inputField.classList.remove("composing"); scheduleHighlight(); });
     input.addEventListener("keyup", positionCaret);
     input.addEventListener("select", positionCaret);
     // Real-time caret tracking: fires on every caret move (arrow keys / Home / End,
@@ -645,7 +771,7 @@
         if (e.shiftKey) return;
         e.preventDefault();
         var v = input.value;
-        if (v.trim() === "") { echo(""); input.value = ""; autoResize(); positionCaret(); return; }
+        if (v.trim() === "") { echo(""); input.value = ""; autoResize(); positionCaret(); hlLayer.textContent = ""; return; }
         submit(v);
         return;
       }
@@ -751,6 +877,7 @@
         });
         conn = await db.connect();   // open the in-memory connection (one-time wasm load already done)
         await applySafeSettings(conn);
+        conn.query("SELECT highlightQuery('SELECT 1')", "Null").catch(function () {});  // warm the highlighter (~37ms cold)
         try {
           var vr = await conn.query("SELECT version()", "JSONCompact");
           var vj = JSON.parse(vr.text() || "{}");
