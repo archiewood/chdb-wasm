@@ -198,6 +198,7 @@
   .reg-line { color: var(--strong-text); }
 
   .input-row { display: flex; align-items: flex-start; gap: 8px; }
+  .echo-row { margin-bottom: 1.2em; }   /* gap between the echoed query and its result */
   .prompt { color: var(--accent-text); font-weight: 600; flex: 0 0 auto; }
   .echo-block {
     flex: 1 1 auto;
@@ -210,9 +211,8 @@
   /* Result box: keep alignment (no wrap), scroll horizontally if wide. */
   .result-table { margin: 4px 0 2px; overflow-x: auto; }
   .result-table .line { white-space: pre; word-break: normal; }
-  .result-table .col-name { color: var(--strong-text); font-weight: 600; }
-  .result-table .col-type { color: var(--muted); }
-  .result-table .cell-value { color: var(--text); }
+  .result-table .ansi-bold { font-weight: 800; }                             /* PrettyCompact column names (bold, no color) */
+  .result-table .ansi-dim  { color: var(--muted); }                          /* PrettyCompact row numbers */
 
   /* ---------- Active input: visible textarea + a duckdb-style BLOCK caret ---------- */
   .input-field { position: relative; flex: 1 1 auto; min-width: 0; }
@@ -301,8 +301,6 @@
   <script type="module">
     import { AsyncChdb, selectBundle } from './dist/index.js';
 
-    var MAX_ROWS = 200; // cap rendered rows to keep the DOM light
-
     var scrollback = document.getElementById("scrollback");
     var terminal = document.getElementById("terminal");
     var input = document.getElementById("cmd-input");
@@ -343,8 +341,6 @@
     });
 
     // ---------- Helpers ----------
-    function repeat(ch, n) { var s = ""; for (var i = 0; i < n; i++) s += ch; return s; }
-    function tn(t) { return document.createTextNode(t); }
     function scrollToBottom() { terminal.scrollTop = terminal.scrollHeight; }
     function appendBlock(node) { scrollback.appendChild(node); scrollToBottom(); }
     function makeLine(cls) { var el = document.createElement("div"); el.className = "line" + (cls ? " " + cls : ""); return el; }
@@ -394,7 +390,7 @@
 
     function echo(query) {
       var row = document.createElement("div");
-      row.className = "input-row";
+      row.className = "input-row echo-row";
       var p = document.createElement("span");
       p.className = "prompt"; p.textContent = "chdb :)";
       var q = document.createElement("span");
@@ -403,66 +399,69 @@
       appendBlock(row);
     }
 
-    // Boxed result (column name + type + separator + value rows).
-    function buildBox(meta, rows) {
-      var names = meta.map(function (m) { return m.name; });
-      var types = meta.map(function (m) { return m.type; });
-      function cell(v) { return v === null ? "NULL" : String(v); }
-      var widths = meta.map(function (m, i) {
-        var w = Math.max(names[i].length, types[i].length);
-        for (var r = 0; r < rows.length; r++) { var s = cell(rows[r][i]); if (s.length > w) w = s.length; }
-        return w + 2;
-      });
-      function bar(l, mid, r) { return l + widths.map(function (w) { return repeat("─", w); }).join(mid) + r; }
-      function center(t, w) { var tot = w - t.length, le = Math.floor(tot / 2); return repeat(" ", le) + t + repeat(" ", tot - le); }
-      function left(v, w) { return " " + v + repeat(" ", w - v.length - 1); }
-      function plain(t) { var line = makeLine(); line.textContent = t; return line; }
-      function styled(texts, cls) {
-        var line = makeLine();
-        line.appendChild(tn("│"));
-        texts.forEach(function (t) {
-          var s = document.createElement("span");
-          s.className = cls; s.textContent = t;
-          line.appendChild(s); line.appendChild(tn("│"));
-        });
-        return line;
+    // Render chDB's PrettyCompact output verbatim (byte-for-byte what ClickHouse shows),
+    // converting its ANSI styling (bold column names, gray row numbers) into themed spans.
+    function ansiToSpans(text) {
+      var frag = document.createDocumentFragment();
+      var re = /\u001b\[([0-9;]*)m/g, last = 0, cls = "", m;
+      function emit(t) {
+        if (!t) return;
+        if (!cls) { frag.appendChild(document.createTextNode(t)); return; }
+        var s = document.createElement("span"); s.className = cls; s.textContent = t; frag.appendChild(s);
       }
+      while ((m = re.exec(text))) {
+        emit(text.slice(last, m.index));
+        last = re.lastIndex;
+        var codes = m[1].split(";").filter(Boolean);
+        if (!codes.length || codes.indexOf("0") !== -1) cls = "";        // reset
+        else if (codes.indexOf("1") !== -1) cls = "ansi-bold";           // column names
+        else if (codes.indexOf("90") !== -1) cls = "ansi-dim";           // row numbers
+      }
+      emit(text.slice(last));
+      return frag;
+    }
 
+    function renderPretty(text) {
       var wrap = document.createElement("div");
       wrap.className = "result-table";
-      wrap.appendChild(plain(bar("┌", "┬", "┐")));
-      wrap.appendChild(styled(names.map(function (n, i) { return center(n, widths[i]); }), "col-name"));
-      wrap.appendChild(styled(types.map(function (t, i) { return center(t, widths[i]); }), "col-type"));
-      wrap.appendChild(plain(bar("├", "┼", "┤")));
-      rows.forEach(function (row) {
-        wrap.appendChild(styled(row.map(function (v, i) { return left(cell(v), widths[i]); }), "cell-value"));
+      text.replace(/\n+$/, "").split("\n").forEach(function (ln) {
+        var line = makeLine();
+        line.appendChild(ansiToSpans(ln));
+        wrap.appendChild(line);
       });
-      wrap.appendChild(plain(bar("└", "┴", "┘")));
       return wrap;
     }
 
-    function appendResult(j, res) {
-      var meta = j.meta || [];
-      var data = j.data || [];
-      var totalRows = (j.rows != null) ? j.rows : data.length;
-      var block = document.createElement("div");
+    // Footer mirrors clickhouse-client's "N rows in set. Elapsed: …". The "Processed …
+    // rows" line is intentionally omitted: it reports the source rows SCANNED during
+    // execution (ClickHouse's progress read_rows), but chdb-wasm only exposes the result
+    // size (rowsRead == result rows, e.g. 1 for `SELECT count()`), not the scanned count.
+    // It comes back once the wasm progress callback is exposed.
+    function footerLine(rowCount, res) {
+      var el = (res && typeof res.elapsedSeconds === "number") ? res.elapsedSeconds : 0;
+      var line = makeLine("muted-line");
+      line.textContent = rowCount + (rowCount === 1 ? " row" : " rows") + " in set. Elapsed: " + el.toFixed(3) + " sec.";
+      return line;
+    }
 
-      if (!meta.length) {
-        var ok = makeLine("ok-line");
-        ok.textContent = "OK.";
-        block.appendChild(ok);
+    // SELECT/SHOW/WITH/… return a result set (=> "0 rows in set" when empty); other
+    // statements (CREATE/INSERT/SET/…) report "Ok." like clickhouse-client.
+    function producesResultSet(sql) { return /^\s*\(*\s*(select|with|show|desc|describe|explain|values|exists)\b/i.test(sql); }
+
+    function appendResult(res, sql) {
+      var text = res.text(), body = text.replace(/\s+$/, "");
+      var block = document.createElement("div");
+      if (body === "") {
+        if (producesResultSet(sql)) block.appendChild(footerLine(0, res));
+        else { var ok = makeLine("ok-line"); ok.textContent = "Ok."; block.appendChild(ok); }
       } else {
-        var shown = Math.min(data.length, MAX_ROWS);
-        block.appendChild(buildBox(meta, data.slice(0, shown)));
-        if (data.length > shown) {
-          var trunc = makeLine("muted-line");
-          trunc.textContent = "… showing first " + shown + " of " + data.length + " returned rows.";
-          block.appendChild(trunc);
-        }
-        var elapsed = (res && typeof res.elapsedSeconds === "number") ? res.elapsedSeconds.toFixed(3) : "0.000";
-        var foot = makeLine("muted-line");
-        foot.textContent = totalRows + (totalRows === 1 ? " row" : " rows") + " in set. Elapsed: " + elapsed + " sec.";
-        block.appendChild(foot);
+        block.appendChild(renderPretty(text));
+        // True result size: the engine's "Showed X out of Y rows." note when truncated,
+        // else the number of rendered data rows (lines carrying a cell separator).
+        var note = body.match(/Showed\s+[\d,]+\s+out\s+of\s+([\d,]+)\s+rows/i);
+        var rowCount = note ? parseInt(note[1].replace(/,/g, ""), 10)
+                            : body.split("\n").filter(function (l) { return l.indexOf("│") !== -1; }).length;
+        block.appendChild(footerLine(rowCount, res));
       }
       block.appendChild(spacerLine());
       appendBlock(block);
@@ -527,12 +526,8 @@
       try {
         for (var i = 0; i < stmts.length; i++) {
           var isLast = (i === stmts.length - 1);
-          var res = await conn.query(stmts[i], isLast ? "JSONCompact" : "Null");
-          if (isLast) {
-            var j = {};
-            try { j = JSON.parse(res.text() || "{}"); } catch (e) {}
-            appendResult(j, res);
-          }
+          var res = await conn.query(stmts[i], isLast ? "PrettyCompact" : "Null");
+          if (isLast) appendResult(res, stmts[i]);
         }
       } catch (e) {
         printLine(e && e.message ? e.message : String(e), "error-line");
