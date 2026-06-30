@@ -456,12 +456,10 @@
         else { var ok = makeLine("ok-line"); ok.textContent = "Ok."; block.appendChild(ok); }
       } else {
         block.appendChild(renderPretty(text));
-        // True result size: the engine's "Showed X out of Y rows." note when truncated,
-        // else the number of rendered data rows (lines carrying a cell separator).
-        var note = body.match(/Showed\s+[\d,]+\s+out\s+of\s+([\d,]+)\s+rows/i);
-        var rowCount = note ? parseInt(note[1].replace(/,/g, ""), 10)
-                            : body.split("\n").filter(function (l) { return l.indexOf("│") !== -1; }).length;
-        block.appendChild(footerLine(rowCount, res));
+        // Row count comes straight from the engine (rowsRead == result rows), so it is
+        // correct for the box layout, the wide-table Vertical fallback (which has no │ to
+        // count), and display-truncated results alike.
+        block.appendChild(footerLine((res && res.rowsRead) || 0, res));
       }
       block.appendChild(spacerLine());
       appendBlock(block);
