@@ -633,8 +633,11 @@
         // first credible ratio is no more than halfway (≤ 50%); otherwise stay indeterminate (spinner
         // only). Erring low means the worst case is a spinner where a bar was possible — never a fake
         // near-100% bar.
+        // Use the monotonic maxRows (not the raw tick) as the numerator so the bar and the visible
+        // row counter are always built from the same number — otherwise a phased query could show
+        // 0% on the bar while the counter already reads 1M rows.
         if (p.totalRowsToRead > 0) {
-          var pc = p.readRows / p.totalRowsToRead * 100;
+          var pc = maxRows / p.totalRowsToRead * 100;
           if (barPct === null) { if (pc <= 50) barPct = Math.min(99, pc); }
           else barPct = Math.min(99, Math.max(barPct, pc));
         }
