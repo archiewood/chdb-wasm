@@ -848,11 +848,11 @@
     // ---------- Examples dropdown ----------
     // Click an item to drop the query into the prompt; press Enter to run it.
     var EXAMPLES = [
-      { group: "Local", label: "Version", sql: "SELECT version();" },
-      { group: "Local", label: "Generated rows", sql: "SELECT number, number * number AS square FROM numbers(10);" },
-      { group: "Remote files", label: "TSV via url()", sql: "SELECT * FROM url('https://datasets-documentation.s3.eu-west-3.amazonaws.com/nyc-taxi/trips_0.gz', 'TabSeparatedWithNames') LIMIT 10;" },
-      { group: "Remote files", label: "TSV via s3()", sql: "SELECT * FROM s3('https://datasets-documentation.s3.eu-west-3.amazonaws.com/nyc-taxi/trips_0.gz', NOSIGN, 'TabSeparatedWithNames') LIMIT 10;" },
-      { group: "Remote files", label: "Parquet via url()", sql: "SELECT * FROM url('https://datasets-documentation.s3.eu-west-3.amazonaws.com/house_parquet/house_0.parquet') LIMIT 10;" }
+      { group: "Local", label: "Version", sql: "SELECT version()" },
+      { group: "Local", label: "Generated rows", sql: "SELECT number, number * number AS square FROM numbers(10)" },
+      { group: "Remote files", label: "TSV via url()", sql: "SELECT * FROM url('https://datasets-documentation.s3.eu-west-3.amazonaws.com/nyc-taxi/trips_0.gz', 'TabSeparatedWithNames') LIMIT 10" },
+      { group: "Remote files", label: "TSV via s3()", sql: "SELECT * FROM s3('https://datasets-documentation.s3.eu-west-3.amazonaws.com/nyc-taxi/trips_0.gz', NOSIGN, 'TabSeparatedWithNames') LIMIT 10" },
+      { group: "Remote files", label: "Parquet via url()", sql: "SELECT * FROM url('https://datasets-documentation.s3.eu-west-3.amazonaws.com/house_parquet/house_0.parquet') LIMIT 10" }
     ];
     function openExamples() { examplesMenu.classList.remove("hide"); btnExamples.setAttribute("aria-expanded", "true"); }
     function closeExamples() { examplesMenu.classList.add("hide"); btnExamples.setAttribute("aria-expanded", "false"); }
