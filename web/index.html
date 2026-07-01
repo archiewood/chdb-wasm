@@ -587,12 +587,11 @@
       var s = "↑ Progress: " + fmtQty(p.readRows) + " rows, " + fmtBytes(p.readBytes) +
               " (" + fmtQty(rateSecs > 0 ? p.readRows / rateSecs : 0) + " rows/s., " + fmtBytes(rateSecs > 0 ? p.readBytes / rateSecs : 0) + "/s.)";
       if (p.memoryUsage) s += " (" + fmtBytesBin(p.memoryUsage) + " RAM)";
-      // The bar is only engaged for a credible total (see showProgress); once engaged, keep it
-      // (capped at 99%, non-decreasing) even if a later tick reports totalRowsToRead=0 — otherwise
-      // it would vanish mid-query when a url/s3 read stops reporting a total. When no credible total
-      // is ever seen, barPct stays null and we show the indeterminate form (counters + spinner only).
-      // A climbing bar (and the live counters) already signal the query is alive, so the spinner is
-      // only shown in the indeterminate case where it's the sole liveness cue.
+      // Show the bar once any total has been reported, and keep it (capped at 99%, non-decreasing)
+      // even if a later tick reports totalRowsToRead=0 — otherwise it would vanish mid-query when a
+      // url/s3 read stops reporting a total. If no total is ever reported, barPct stays null and we
+      // show the indeterminate form (counters + spinner). A climbing bar (and the live counters)
+      // already signal the query is alive, so the spinner is only shown in that indeterminate case.
       if (barPct !== null) s += "  " + progressBar(barPct) + " " + barPct.toFixed(0) + "%";
       else s += "  " + spinner;
       return s;
@@ -628,20 +627,14 @@
         maxMem = Math.max(maxMem, p.memoryUsage || 0);
         lastP = { readRows: maxRows, readBytes: maxBytes, memoryUsage: maxMem };
         lastRateSecs = (now() - t0) / 1000;
-        // Only show a percentage when the engine gives a *credible* total to count down from.
-        // Remote reads (url/s3/parquet) briefly report totalRowsToRead≈readRows (ratio ~100%) then
-        // drop it to 0 — that isn't real progress, so a bar there would just sit at 99% the whole
-        // query. A genuine scan's first ratio is near 0% and climbs, so only engage the bar when the
-        // first credible ratio is no more than halfway (≤ 50%); otherwise stay indeterminate (spinner
-        // only). Erring low means the worst case is a spinner where a bar was possible — never a fake
-        // near-100% bar.
-        // Use the monotonic maxRows (not the raw tick) as the numerator so the bar and the visible
-        // row counter are always built from the same number — otherwise a phased query could show
-        // 0% on the bar while the counter already reads 1M rows.
+        // Show a bar whenever the engine reports a total — straight from what it returns, with no
+        // credibility filtering. Remote reads (url/s3) report a bogus total≈readRows for a tick, so
+        // they simply sit at 99% — inaccurate, but honest to the source. Kept non-decreasing and
+        // capped at 99% (the finished result replaces the line), and built from the monotonic maxRows
+        // so the bar and the visible row counter never disagree.
         if (p.totalRowsToRead > 0) {
-          var pc = maxRows / p.totalRowsToRead * 100;
-          if (barPct === null) { if (pc <= 50) barPct = Math.min(99, pc); }
-          else barPct = Math.min(99, Math.max(barPct, pc));
+          var pc = Math.min(99, maxRows / p.totalRowsToRead * 100);
+          if (barPct === null || pc > barPct) barPct = pc;
         }
         paint();
       }
